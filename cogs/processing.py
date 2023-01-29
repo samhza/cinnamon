@@ -124,7 +124,6 @@ class Processing(commands.Cog):
     async def input(self, url: str, allowed_types: list) -> processing.File:
         return await self.bot.loop.run_in_executor(self.executor, functools.partial(input, url, allowed_types))
 
-
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError):
         if isinstance(error, (commands.BadArgument)):
                 await ctx.reply(str(error))
@@ -158,9 +157,9 @@ class Processing(commands.Cog):
             await ctx.reply(file=discord.File(fname))
               
     @commands.command(name="firstframe")
-    async def firstframe(self, ctx: commands.Context, url: URL):
-        async with TempFiles(ctx) as files:
-                input = await self.input(url, ["video", "gif"])
+    async def firstframe(self, ctx: commands.Context, url: typing.Optional[URL]):
+        with TempFiles(ctx) as files:
+                input = await files.input(url, ["video", "gif"])
                 fname = await self.processing.first_frame(input)
                 await ctx.reply(file=discord.File(fname))
 
@@ -187,7 +186,6 @@ class Processing(commands.Cog):
     async def stitch(self, ctx: commands.Context, url1: URL, url2: URL):
         await self._stack(ctx, "hstack", url1, url2)
 
-        
     @commands.command(name="stack")
     async def stack(self, ctx: commands.Context, url1: URL, url2: URL):
         await self._stack(ctx, "vstack", url1, url2)
