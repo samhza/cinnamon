@@ -113,7 +113,19 @@ class Processing():
         except Exception as e:
             os.remove(out)
             raise e
-
+    async def gif(self, inputf: File) -> str:
+        out = tmpfile.reserve(".gif")
+        input = ffmpeg.input(inputf.name)
+        input = input.filter('fps', 30)
+        split = input.filter_multi_output('split')
+        palette = split[0].filter('palettegen')
+        output = ffmpeg.filter([split[1], palette], 'paletteuse')
+        try:
+            await ffutil.run(output.output(out))
+            return out
+        except Exception as e:
+            os.remove(out)
+            raise e
     async def loopvid(self, inputf: File, length: int) -> str:
         out = tmpfile.reserve(".mp4")
         input = ffmpeg.input(inputf.name, stream_loop=-1)

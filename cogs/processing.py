@@ -167,6 +167,14 @@ class Processing(commands.Cog):
                 fname = await self.processing.first_frame(input)
                 await ctx.reply(file=discord.File(fname))
 
+    @commands.command(name="gif")
+    async def gif(self, ctx: commands.Context, url: typing.Optional[URL]):
+        with TempFiles(ctx) as files:
+            input = await files.input(url, ["video"])
+            fname = await self.processing.gif(input)
+            files.append(fname)
+            await ctx.reply(file=discord.File(fname))
+
     @commands.command(name="loop")
     async def loop(self, ctx: commands.Context, url: typing.Optional[URL], duration: int):
         with TempFiles(ctx) as files:
@@ -184,8 +192,6 @@ class Processing(commands.Cog):
             fname = await self.processing.cut(input1, input2, delay)
             files.append(fname)
             await ctx.reply(file=discord.File(fname))
-
-                    
     @commands.command(name="stitch")
     async def stitch(self, ctx: commands.Context, url1: URL, url2: URL):
         await self._stack(ctx, "hstack", url1, url2)

@@ -40,6 +40,7 @@
             ffmpeg-python
             magic
             requests
+            black
           ]))
         ];
       };
