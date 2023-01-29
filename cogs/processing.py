@@ -36,9 +36,17 @@ async def media_from_message(
 
 
 class DisallowedMediaError(Exception):
-    def __init__(self, type: str) -> None:
+    def __init__(
+        self, type: str, allowed: typing.Optional[typing.List[str]] = None
+    ) -> None:
         self.type = type
-        super().__init__(f"Unsupported media type {type}")
+        self.allowed = allowed
+
+    def __str__(self) -> str:
+        if self.allowed:
+            return f"Media type {self.type} is not allowed. Allowed types: {', '.join(self.allowed)}"
+        else:
+            return f"Media type {self.type} is not allowed."
 
 
 def mime_to_media_type(mime: str) -> str:
@@ -55,15 +63,15 @@ def mime_to_media_type(mime: str) -> str:
 
 
 def input(url: str, allowed_types: list) -> processing.File:
-    type = mimetypes.guess_type(url)[0]
-    if mime_to_media_type(type) not in allowed_types:
-        raise commands.BadArgument("Unsupported media type")
+    mtype = mimetypes.guess_type(url)[0]
+    if type := mime_to_media_type(mtype) not in allowed_types:
+        raise DisallowedMediaError(type, allowed_types)
     with requests.get(url, stream=True) as resp:
         resp.raise_for_status()
         first = next(resp.iter_content(chunk_size=512))
         mime = magic.detect_from_content(first)
-        if mime_to_media_type(mime.mime_type) not in allowed_types:
-            raise commands.BadArgument("Unsupported media type")
+        if type := mime_to_media_type(mime.mime_type) not in allowed_types:
+            raise DisallowedMediaError(type, allowed_types)
         with tempfile.NamedTemporaryFile(delete=False) as f:
             try:
                 f.write(first)
@@ -108,19 +116,28 @@ async def ensure_input_url(ctx: commands.Context, input: typing.Optional[str]) -
     return input
 
 
+def cleanup(files):
+    for file in files:
+        os.remove(file)
+
+
 # context manager to delete multiple temporary files
-class TempFiles:
+class Working:
     def __init__(self, ctx: commands.Context):
         self.ctx = ctx
         self.exec = ctx.bot.get_cog("Processing").executor
         self.files = []
 
-    def __enter__(self):
+    async def __aenter__(self):
+        self.typing = self.ctx.typing()
+        await self.typing.__aenter__()
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        for file in self.files:
-            os.remove(file)
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        await self.typing.__aexit__(exc_type, exc_value, traceback)
+        await self.ctx.bot.loop.run_in_executor(
+            self.exec, functools.partial(cleanup, self.files)
+        )
 
     def append(self, file: str):
         self.files.append(file)
@@ -129,9 +146,12 @@ class TempFiles:
         self, url: typing.Optional[str], allowed_types: list
     ) -> processing.File:
         url = await ensure_input_url(self.ctx, url)
-        f = await self.ctx.bot.loop.run_in_executor(
-            self.exec, functools.partial(input, url, allowed_types)
-        )
+        try:
+            f = await self.ctx.bot.loop.run_in_executor(
+                self.exec, functools.partial(input, url, allowed_types)
+            )
+        except DisallowedMediaError as e:
+            raise commands.BadArgument(str(e))
         self.append(f.name)
         return f
 
@@ -141,6 +161,14 @@ class Processing(commands.Cog):
         self.bot = bot
         self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=4)
         self.processing = processing.Processing(self.executor, self.bot.loop)
+
+    async def cog_command_error(
+        self, ctx: commands.Context, error: commands.CommandError
+    ):
+        if isinstance(error, commands.BadArgument):
+            await ctx.send(str(error), ephemeral=True)
+        if isinstance(error, DisallowedMediaError):
+            await ctx.send(str(error), ephemeral=True)
 
     async def input(self, url: str, allowed_types: list) -> processing.File:
         return await self.bot.loop.run_in_executor(
@@ -154,7 +182,7 @@ class Processing(commands.Cog):
             await ctx.reply(str(error))
 
     async def _stack(self, ctx: commands.Context, method: str, url1: str, url2: str):
-        with TempFiles(ctx) as files:
+        async with Working(ctx) as files:
             input1 = await files.input(url1, ["image", "video", "gif", "gifv"])
             input2 = await files.input(url2, ["image", "video", "gif", "gifv"])
             fname = await self.processing.stack(method, input1, input2)
@@ -181,7 +209,7 @@ class Processing(commands.Cog):
         direction: str,
         amount: int,
     ):
-        with TempFiles(ctx) as files:
+        async with Working(ctx) as files:
             input = await files.input(url, ["video"])
             fname = await self.processing.crop(input, direction, amount)
             files.append(fname)
@@ -189,14 +217,14 @@ class Processing(commands.Cog):
 
     @commands.command(name="firstframe")
     async def firstframe(self, ctx: commands.Context, url: typing.Optional[URL]):
-        with TempFiles(ctx) as files:
+        async with Working(ctx) as files:
             input = await files.input(url, ["video", "gif"])
             fname = await self.processing.first_frame(input)
             await ctx.reply(file=discord.File(fname))
 
     @commands.command(name="gif")
     async def gif(self, ctx: commands.Context, url: typing.Optional[URL]):
-        with TempFiles(ctx) as files:
+        async with Working(ctx) as files:
             input = await files.input(url, ["video"])
             fname = await self.processing.gif(input)
             files.append(fname)
@@ -206,7 +234,7 @@ class Processing(commands.Cog):
     async def loop(
         self, ctx: commands.Context, url: typing.Optional[URL], duration: int
     ):
-        with TempFiles(ctx) as files:
+        async with Working(ctx) as files:
             input = await files.input(url, ["video", "image", "gif"])
             fname = await self.processing.loopvid(input, duration)
             files.append(fname)
@@ -220,7 +248,7 @@ class Processing(commands.Cog):
         url2: str,
         delay: typing.Optional[int] = 0,
     ):
-        with TempFiles(ctx) as files:
+        async with Working(ctx) as files:
             input1 = await files.input(url1, ["video", "gif", "gifv"])
             input2 = await files.input(url2, ["video", "gif", "gifv"])
             fname = await self.processing.cut(input1, input2, delay)
@@ -239,7 +267,7 @@ class Processing(commands.Cog):
     async def meme(
         self, ctx: commands.Context, media: typing.Optional[URL], top: str, bottom: str
     ):
-        with TempFiles(ctx) as files:
+        async with Working(ctx) as files:
             input = await files.input(media, ["image", "gif", "gifv", "video"])
             fname = await self.processing.meme(input, top, bottom)
             files.append(fname)
