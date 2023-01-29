@@ -14,7 +14,8 @@ import util.ffmpeg as ffutil
 import typing
 import contextlib
 
-def media_from_message(message: discord.Message) -> str | None:
+
+async def media_from_message(ctx: commands.Context, message: discord.Message) -> str | None:
     for attachment in message.attachments:
         if attachment.height:
             return attachment.url
@@ -24,9 +25,12 @@ def media_from_message(message: discord.Message) -> str | None:
         if embed.type == "image":
             return embed.thumbnail.proxy_url
         if embed.type == "gifv":
-            raise commands.BadArgument("TODO: gifv")
+            if embed.url.startswith("https://tenor.com"):
+                resp = await ctx.bot.session.get(embed.url)
+                body = await resp.text()
+                return body.split('rel="image_src" href="')[1].split('"')[0]
+            raise commands.BadArgument(f"TODO: gifv {embed.provider.name}")
     return None
-
 class DisallowedMediaError(Exception):
     def __init__(self, type: str) -> None:
         self.type = type
@@ -75,14 +79,14 @@ class URL(commands.Converter):
         raise commands.BadArgument("Bad URL")
 
 async def find_input(ctx: commands.Context) -> typing.Optional[str]:
-    if media := media_from_message(ctx.message):
+    if media := await media_from_message(ctx, ctx.message):
         return media
     if ctx.message.reference:
         message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-        if media := media_from_message(message):
+        if media := await media_from_message(ctx, message):
             return media
     async for message in ctx.channel.history(limit=50, oldest_first=False, before=ctx.message):
-        if media := media_from_message(message):
+        if media := await media_from_message(ctx, message):
             return media
 
 async def ensure_input_url(ctx: commands.Context, input: typing.Optional[str]) -> str:
