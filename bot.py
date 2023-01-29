@@ -24,7 +24,7 @@ class Cinnamon(AutoShardedBot):
             reactions=True,
             message_content=True,
         )
-        super().__init__(command_prefix="$$", intents=intents)
+        super().__init__(command_prefix=config.prefix, intents=intents)
     async def on_command_error(self, ctx: Context, error: commands.CommandError) -> None:
         if isinstance(error, commands.NoPrivateMessage):
             await ctx.author.send('This command cannot be used in private messages.')
