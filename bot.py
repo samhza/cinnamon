@@ -7,7 +7,7 @@ import aiohttp
 
 initial_extensions = [
     "cogs.basic",
-    "cogs.image",
+    "cogs.processing",
 ]
 
 log = logging.getLogger(__name__)

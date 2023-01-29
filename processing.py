@@ -76,8 +76,8 @@ class Processing():
         tf = tmpfile.reserve(suffix)
         streams = [out]
         kwargs = {}
-        if audio := audio(info, in_file):
-            streams.append(audio)
+        if audiostream := audio(info, in_file):
+            streams.append(audiostream)
             kwargs["acodec"] = "copy"
         try:
             await ffutil.run(ffmpeg.output(*streams, tf, **kwargs).global_args('-loglevel', 'error'))

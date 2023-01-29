@@ -12,6 +12,7 @@ import processing
 import requests
 import util.ffmpeg as ffutil
 import typing
+import contextlib
 
 def media_from_message(message: discord.Message) -> str | None:
     for attachment in message.attachments:
@@ -67,24 +68,54 @@ def input(url: str, allowed_types: list) -> processing.File:
                     os.remove(f.name)
                     raise e
 
-class MediaInput(commands.Converter):
-    async def convert(self, ctx: commands.Context, argument: str) -> str:
-        if ctx.message.attachments:
-            ctx.view.undo()
-            return ctx.message.attachments[0].url
+class URL(commands.Converter):
+    async def convert(self, argument: str) -> str:
         if argument.startswith("http"):
             return argument
-        ctx.view.undo()
-        if ctx.message.reference:
-            message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-            if media := media_from_message(message):
-                return media
-        async for message in ctx.channel.history(limit=50, oldest_first=False, before=ctx.message):
-            if media := media_from_message(message):
-                return media
-        raise commands.BadArgument("No media found")
+        raise commands.BadArgument("Bad URL")
 
-class Basic(commands.Cog):
+async def find_input(ctx: commands.Context) -> typing.Optional[str]:
+    if media := media_from_message(ctx.message):
+        return media
+    if ctx.message.reference:
+        message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+        if media := media_from_message(message):
+            return media
+    async for message in ctx.channel.history(limit=50, oldest_first=False, before=ctx.message):
+        if media := media_from_message(message):
+            return media
+
+async def ensure_input_url(ctx: commands.Context, input: typing.Optional[str]) -> str:
+    if input is None:
+        input = await find_input(ctx)
+        if input is None:
+            raise commands.BadArgument("No media found")
+    return input
+
+# context manager to delete multiple temporary files
+class TempFiles:
+    def __init__(self, ctx: commands.Context):
+        self.ctx = ctx
+        self.exec = ctx.bot.get_cog("Processing").executor
+        self.files = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        for file in self.files:
+            os.remove(file)
+
+    def append(self, file: str):
+        self.files.append(file)
+
+    async def input(self, url: typing.Optional[str], allowed_types: list) -> processing.File:
+        url = await ensure_input_url(self.ctx, url)
+        f = await self.ctx.bot.loop.run_in_executor(self.exec, functools.partial(input, url, allowed_types))
+        self.append(f.name)
+        return f
+
+class Processing(commands.Cog):
     def __init__(self, bot: Cinnamon):
         self.bot = bot
         self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=4)
@@ -98,133 +129,77 @@ class Basic(commands.Cog):
         if isinstance(error, (commands.BadArgument)):
                 await ctx.reply(str(error))
 
-
-    
-
-    async def _stack(self, ctx: commands.Context, method: str, url1: str, url2:str):
-        async with ctx.typing():
-            input1 = None
-            input2 = None
-            fname = None
-            try:
-                input1 = await self.input(url1, ["image", "video", "gif", "gifv"])
-                input2 = await self.input(url2, ["image", "video", "gif", "gifv"])
-                fname = await self.processing.stack(method, input1, input2)
-                await ctx.reply(file=discord.File(fname))
-            finally:
-                if input1 is not None:
-                    os.remove(input1.name)
-                if input2 is not None:
-                    os.remove(input2.name)
-                if fname is not None:
-                    os.remove(fname)
+    async def _stack(self, ctx: commands.Context, method: str, url1: str, url2: str):
+        with TempFiles(ctx) as files:
+            input1 = await files.input(url1, ["image", "video", "gif", "gifv"])
+            input2 = await files.input(url2, ["image", "video", "gif", "gifv"])
+            fname = await self.processing.stack(method, input1, input2)
+            files.append(fname)
+            await ctx.reply(file=discord.File(fname))
     
     @commands.command(name="probe")
-    async def probe(self, ctx: commands.Context, url: MediaInput):
-        async with ctx.typing():
-            input = None
-            try:
-                probed = await ffutil.probe(url)
-                reply = ""
-                for stream in probed["streams"]:
-                    if stream["codec_type"] == "video":
-                        reply += f"Video: {stream['codec_name']} {stream['width']}x{stream['height']} {stream['avg_frame_rate']}fps {stream['duration']}s\n"
-                    elif stream["codec_type"] == "audio":
-                        reply += f"Audio: {stream['codec_name']} {stream['sample_rate']}Hz {stream['duration']}s\n"
-                await ctx.reply(reply)
-            finally:
-                if input is not None:
-                    os.remove(input.name)
+    async def probe(self, ctx: commands.Context, url: typing.Optional[URL]):
+        url = await ensure_input_url(ctx, url)
+        probed = await ffutil.probe(url)
+        reply = ""
+        for stream in probed["streams"]:
+            if stream["codec_type"] == "video":
+                reply += f"Video: {stream['codec_name']} {stream['width']}x{stream['height']} {stream['avg_frame_rate']}fps {stream['duration']}s\n"
+            elif stream["codec_type"] == "audio":
+                reply += f"Audio: {stream['codec_name']} {stream['sample_rate']}Hz {stream['duration']}s\n"
+        await ctx.reply(reply)
 
     @commands.command(name="crop")
-    async def crop(self, ctx: commands.Context, url: MediaInput, direction: str, amount: int):
-        async with ctx.typing():
-            input = None
-            fname = None
-            try:
-                input = await self.input(url, ["video"])
-                fname = await self.processing.crop(input, direction, amount)
-                await ctx.reply(file=discord.File(fname))
-            finally:
-                if input is not None:
-                    os.remove(input.name)
-                if fname is not None:
-                    os.remove(fname)
+    async def crop(self, ctx: commands.Context, url: typing.Optional[URL], direction: str, amount: int):
+        with TempFiles(ctx) as files:
+            input = await files.input(url, ["video"])
+            fname = await self.processing.crop(input, direction, amount)
+            files.append(fname)
+            await ctx.reply(file=discord.File(fname))
               
     @commands.command(name="firstframe")
-    async def firstframe(self, ctx: commands.Context, url: MediaInput):
-        async with ctx.typing():
-            input = None
-            fname = None
-            try:
+    async def firstframe(self, ctx: commands.Context, url: URL):
+        async with TempFiles(ctx) as files:
                 input = await self.input(url, ["video", "gif"])
                 fname = await self.processing.first_frame(input)
                 await ctx.reply(file=discord.File(fname))
-            finally:
-                if input is not None:
-                    os.remove(input.name)
-                if fname is not None:
-                    os.remove(fname)
 
     @commands.command(name="loop")
-    async def loop(self, ctx: commands.Context, url: MediaInput, duration: int):
-        async with ctx.typing():
-            input = None
-            fname = None
-            try:
-                input = await self.input(url, ["video", "image", "gif"])
-                fname = await self.processing.loopvid(input, duration)
-                await ctx.reply(file=discord.File(fname))
-            finally:
-                if input is not None:
-                    os.remove(input.name)
-                if fname is not None:
-                    os.remove(fname)
+    async def loop(self, ctx: commands.Context, url: typing.Optional[URL], duration: int):
+        with TempFiles(ctx) as files:
+            input = await files.input(url, ["video", "image", "gif"])
+            fname = await self.processing.loopvid(input, duration)
+            files.append(fname)
+            await ctx.reply(file=discord.File(fname))
 
     
     @commands.command(name="cut")
     async def cut(self, ctx: commands.Context, url1:str, url2:str, delay: typing.Optional[int] = 0):
-        async with ctx.typing():
-            input1 = None
-            input2 = None
-            fname = None
-            try:
-                input1 = await self.input(url1, ["video", "gif", "gifv"])
-                input2 = await self.input(url2, ["video", "gif", "gifv"])
-                fname = await self.processing.cut(input1, input2, delay)
-                await ctx.reply(file=discord.File(fname))
-            finally:
-                if input1 is not None:
-                    os.remove(input1.name)
-                if input2 is not None:
-                    os.remove(input2.name)
-                if fname is not None:
-                    os.remove(fname)
+        with TempFiles(ctx) as files:
+            input1 = await files.input(url1, ["video", "gif", "gifv"])
+            input2 = await files.input(url2, ["video", "gif", "gifv"])
+            fname = await self.processing.cut(input1, input2, delay)
+            files.append(fname)
+            await ctx.reply(file=discord.File(fname))
+
                     
     @commands.command(name="stitch")
-    async def stitch(self, ctx: commands.Context, url1: str, url2: str):
+    async def stitch(self, ctx: commands.Context, url1: URL, url2: URL):
         await self._stack(ctx, "hstack", url1, url2)
 
         
     @commands.command(name="stack")
-    async def stack(self, ctx: commands.Context, url1: str, url2: str):
+    async def stack(self, ctx: commands.Context, url1: URL, url2: URL):
         await self._stack(ctx, "vstack", url1, url2)
 
     @commands.command(name="meme")
-    async def meme(self, ctx: commands.Context, media: MediaInput, top: str, bottom: str):
-        async with ctx.typing():
-            input = None
-            fname = None
-            try:
-                input = await self.input(media, ["image", "gif", "gifv", "video"])
-                fname = await self.processing.meme(input, top, bottom)
-                await ctx.reply(file=discord.File(fname))
-            finally:
-                if fname:
-                    os.remove(fname)
-                if input:
-                    os.remove(input.name)
-        
+    async def meme(self, ctx: commands.Context, media: typing.Optional[URL], top: str, bottom: str):
+        with TempFiles(ctx) as files:
+            input = await files.input(media, ["image", "gif", "gifv", "video"])
+            fname = await self.processing.meme(input, top, bottom)
+            files.append(fname)
+            await ctx.reply(file=discord.File(fname))
+    
 
 async def setup(bot: Cinnamon) -> None:
-    await bot.add_cog(Basic(bot))
+    await bot.add_cog(Processing(bot))
