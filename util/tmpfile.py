@@ -1,6 +1,7 @@
 import tempfile
 import os
 
+
 def reserve(suffix: str) -> str:
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
         try:
