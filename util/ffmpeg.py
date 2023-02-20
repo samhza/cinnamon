@@ -17,12 +17,20 @@ class ProbeError(Exception):
         super().__init__(f"FFprobe exited with status {status}: {stderr}")
 
 
+running = 0
+
+
 async def run(stream_spec) -> None:
+    global running
+    running += 1
+    print(f"Running {running}")
     args = ffmpeg.compile(stream_spec, overwrite_output=True)
     proc = await asyncio.create_subprocess_exec(
         *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     _, stderr = await proc.communicate()
+    running -= 1
+    print(f"Running {running}")
     if proc.returncode != 0:
         raise FFmpegError(proc.returncode, stderr.decode())
     return

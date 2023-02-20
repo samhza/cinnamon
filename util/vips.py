@@ -1,4 +1,5 @@
 import pyvips
+from pyvips import GValue
 from util.tmpfile import reserve as mk_tempfile
 import os
 
@@ -10,6 +11,35 @@ def outline(img: pyvips.Image, radius: int) -> pyvips.Image:
     mask = pyvips.Image.gaussmat(radius / 2, 0.0001, separable=True) * 10
     img = img[3].convsep(mask).cast("uchar")
     return img.new_from_image([0, 0, 0]).bandjoin(img)
+
+def caption(width: int, text: str) -> pyvips.Image:
+    text = pyvips.Image.text(
+        text,
+        rgba=True,
+        align="centre",
+        # TODO use Futura
+        font=f'DejaVu Sans {width//10}',
+        width=width,
+    )
+    text = text.new_from_image([0,0,0]).bandjoin(text[3])
+    text = text.gravity("centre", width, text.height + width//10)
+    text = text.new_from_image([255,255,255]).composite2(text, "over")
+
+    return text
+
+
+def vstack(top: pyvips.Image, img: pyvips.Image) -> pyvips.Image:
+    caption_height = top.height
+    top = top.embed(0, 0, img.width, img.height + caption_height, extend="black")
+    if not img.hasalpha():
+        img = img.bandjoin(255)
+    replicated = top.replicate(1, img.get_n_pages())
+    page_height = img.get_page_height()
+    for i in range(img.get_n_pages()):
+        frame = img.crop(0, i * page_height, img.width, page_height)
+        replicated = replicated.insert(frame, 0, i * top.height + caption_height)
+    replicated.set_type(GValue.gint_type, 'page-height', top.height)
+    return replicated
 
 
 def meme(width: int, height: int, top: str, bottom: str) -> pyvips.Image:

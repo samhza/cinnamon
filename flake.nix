@@ -27,6 +27,7 @@
       devShell = pkgs.mkShell {
         buildInputs = with pkgs; [
           (python3.withPackages(ps: with ps; [
+            yt-dlp
             discordpy
             (ps.pyvips.override {
               vips = (pkgs.vips.overrideAttrs (old: {

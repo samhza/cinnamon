@@ -87,11 +87,18 @@ def input(url: str, allowed_types: list) -> processing.File:
                 raise e
 
 
-class URL(commands.Converter):
-    async def convert(self, argument: str) -> str:
-        if argument.startswith("http"):
-            return argument
-        raise commands.BadArgument("Bad URL")
+def URL(argument: str) -> str:
+    if argument.startswith("http"):
+        return argument
+    raise commands.BadArgument("Bad URL")
+
+
+def Edits(argument: str) -> processing.Edits:
+    try:
+        edits = processing.parse_edits(argument)
+    except processing.ParseError as e:
+        raise commands.BadArgument(str(e))
+    return edits
 
 
 async def find_input(ctx: commands.Context) -> typing.Optional[str]:
@@ -270,6 +277,26 @@ class Processing(commands.Cog):
         async with Working(ctx) as files:
             input = await files.input(media, ["image", "gif", "gifv", "video"])
             fname = await self.processing.meme(input, top, bottom)
+            files.append(fname)
+            await ctx.reply(file=discord.File(fname))
+
+    @commands.command(name="caption")
+    async def caption(
+        self, ctx: commands.Context, media: typing.Optional[URL], caption: str
+    ):
+        async with Working(ctx) as files:
+            input = await files.input(media, ["image", "gif"])
+            fname = await self.processing.caption(input, caption)
+            files.append(fname)
+            await ctx.reply(file=discord.File(fname))
+
+    @commands.command(name="edit")
+    async def edit(
+        self, ctx: commands.Context, media: typing.Optional[URL], *, edits: Edits
+    ):
+        async with Working(ctx) as files:
+            input = await files.input(media, ["video"])
+            fname = await self.processing.edit(input, edits)
             files.append(fname)
             await ctx.reply(file=discord.File(fname))
 
