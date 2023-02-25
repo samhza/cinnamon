@@ -6,6 +6,7 @@ import logging
 import aiohttp
 
 initial_extensions = [
+    "cogs.admin",
     "cogs.basic",
     "cogs.processing",
 ]
@@ -46,8 +47,14 @@ class Cinnamon(AutoShardedBot):
 
     async def setup_hook(self) -> None:
         self.session: aiohttp.ClientSession = aiohttp.ClientSession()
+        self.bot_app_info = await self.application_info()
+        self.owner_id = self.bot_app_info.owner.id
         for extension in initial_extensions:
             try:
                 await self.load_extension(extension)
             except Exception as e:
                 log.exception("Failed to load extension %s.", extension)
+
+    @property
+    def owner(self) -> discord.User:
+        return self.bot_app_info.owner
