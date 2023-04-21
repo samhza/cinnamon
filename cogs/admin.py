@@ -1,4 +1,5 @@
 from bot import Cinnamon
+import discord
 from discord.ext import commands
 from discord.ext.commands import Context
 from typing import Optional
